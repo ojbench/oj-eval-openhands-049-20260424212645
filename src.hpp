@@ -38,50 +38,55 @@ public:
     Vec get_v_next() {
         int n = monitor->get_robot_number();
         Vec pref_v = (pos_tar - pos_cur);
-        double dist = pref_v.norm();
+        double dist_sqr = pref_v.norm_sqr();
         
-        if (dist < EPSILON) return Vec(0, 0);
+        if (dist_sqr < EPSILON * EPSILON) return Vec(0, 0);
 
+        double dist = sqrt(dist_sqr);
         if (dist > v_max) {
-            pref_v = pref_v.normalize() * v_max;
-        } else {
-            // If close to target, we might want to slow down to exactly reach it
-            // but the simulator allows moving at v_max as long as we don't overshoot.
-            // Actually, the simulator says we don't stop automatically.
+            pref_v = pref_v * (v_max / dist);
         }
 
-        const double T_hor = 4.0;
-        const double buffer = 0.1;
+        const double T_hor = 5.0;
+        const double buffer = 0.15;
+        const double v_max_sqr = v_max * v_max;
+
+        struct OtherRobot {
+            Vec p, v;
+            double r_sum_sqr;
+            double r_sum;
+        };
+        std::vector<OtherRobot> others;
+        others.reserve(n);
+        for (int j = 0; j < n; ++j) {
+            if (j == id) continue;
+            others.push_back({monitor->get_pos_cur(j), monitor->get_v_cur(j), 
+                              pow(r + monitor->get_r(j) + buffer, 2),
+                              r + monitor->get_r(j) + buffer});
+        }
 
         auto get_score = [&](Vec v) {
-            if (v.norm() > v_max + 1e-7) return -2e18;
+            double v_norm_sqr = v.norm_sqr();
+            if (v_norm_sqr > v_max_sqr + 1e-7) return -2e18;
             
             double min_t_collision = T_hor;
             bool collision_imminent = false;
             double penalty = 0;
 
-            for (int j = 0; j < n; ++j) {
-                if (j == id) continue;
-                Vec pj = monitor->get_pos_cur(j);
-                Vec vj = monitor->get_v_cur(j);
-                double rj = monitor->get_r(j);
-                
-                Vec dp = pos_cur - pj;
-                Vec dv = v - vj;
-                double R = r + rj + buffer;
+            for (const auto& other : others) {
+                Vec dp = pos_cur - other.p;
+                Vec dv = v - other.v;
                 
                 double a = dv.norm_sqr();
                 double b = 2 * dp.dot(dv);
-                double c = dp.norm_sqr() - R * R;
+                double c = dp.norm_sqr() - other.r_sum_sqr;
                 
                 if (c < 0) {
-                    if (b < 0) return -1e18 + b; // Getting worse, prioritize moving apart
+                    if (b < 0) return -1e18 + b; 
                     else continue; 
                 }
                 
-                if (b < 0) {
-                    // Check if collision occurs within T_hor
-                    // Quadratic: a*t^2 + b*t + c = 0
+                if (b < 0 && a > 1e-9) {
                     double disc = b * b - 4 * a * c;
                     if (disc > 0) {
                         double t = (-b - sqrt(disc)) / (2 * a);
@@ -92,13 +97,10 @@ public:
                     }
                 }
                 
-                // Right-hand bias: prefer velocities that pass to the right
-                // Relative position dp, relative velocity dv.
-                // We want dv to have a positive cross product with dp? 
-                // No, if dp is from j to i, and dv is i's velocity relative to j.
-                // If dv is pointing towards j, we want it to steer right.
                 double cp = dp.cross(dv);
-                penalty += 0.01 * std::max(0.0, -cp); // Small penalty for passing on the left
+                if (dp.dot(dv) < 0) {
+                    penalty += 0.05 * std::max(0.0, -cp); 
+                }
             }
 
             if (collision_imminent) {
@@ -112,7 +114,6 @@ public:
         double best_score = get_score(best_v);
 
         auto update_best = [&](Vec v) {
-            if (v.norm() > v_max) v = v.normalize() * v_max;
             double s = get_score(v);
             if (s > best_score) {
                 best_score = s;
@@ -122,10 +123,9 @@ public:
 
         update_best(pref_v);
         update_best(v_cur);
-        update_best(Vec(0, 0));
         
-        const int num_dirs = 72;
-        const int num_speeds = 4;
+        const int num_dirs = 36;
+        const int num_speeds = 3;
         for (int i = 0; i < num_dirs; ++i) {
             double theta = 2.0 * M_PI * i / num_dirs;
             Vec dir(cos(theta), sin(theta));
@@ -134,9 +134,8 @@ public:
             }
         }
         
-        // Add some samples around pref_v and v_cur
-        for (int i = 1; i <= 10; ++i) {
-            double angle = (i - 5.5) * 0.2;
+        for (int i = 1; i <= 8; ++i) {
+            double angle = (i - 4.5) * 0.2;
             update_best(pref_v.rotate(angle));
             update_best(v_cur.rotate(angle));
         }
