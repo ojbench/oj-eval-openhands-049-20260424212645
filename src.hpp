@@ -38,31 +38,31 @@ public:
     Vec get_v_next() {
         int n = monitor->get_robot_number();
         Vec pref_v = (pos_tar - pos_cur);
-        double dist_sqr = pref_v.norm_sqr();
+        double dist = pref_v.norm();
         
-        if (dist_sqr < EPSILON * EPSILON) return Vec(0, 0);
+        if (dist < EPSILON) return Vec(0, 0);
 
-        double dist = sqrt(dist_sqr);
-        if (dist > v_max) {
+        // Scale pref_v to reach target in one step if possible, otherwise v_max
+        if (dist > v_max * TIME_INTERVAL) {
             pref_v = pref_v * (v_max / dist);
+        } else {
+            pref_v = pref_v * (1.0 / TIME_INTERVAL);
         }
 
-        const double T_hor = 5.0;
-        const double buffer = 0.15;
+        const double T_hor = 3.0;
+        const double buffer = 0.05;
         const double v_max_sqr = v_max * v_max;
 
         struct OtherRobot {
             Vec p, v;
             double r_sum_sqr;
-            double r_sum;
         };
         std::vector<OtherRobot> others;
         others.reserve(n);
         for (int j = 0; j < n; ++j) {
             if (j == id) continue;
             others.push_back({monitor->get_pos_cur(j), monitor->get_v_cur(j), 
-                              pow(r + monitor->get_r(j) + buffer, 2),
-                              r + monitor->get_r(j) + buffer});
+                              pow(r + monitor->get_r(j) + buffer, 2)});
         }
 
         auto get_score = [&](Vec v) {
@@ -97,9 +97,9 @@ public:
                     }
                 }
                 
-                double cp = dp.cross(dv);
                 if (dp.dot(dv) < 0) {
-                    penalty += 0.05 * std::max(0.0, -cp); 
+                    double cp = dp.cross(dv);
+                    penalty += 0.02 * std::max(0.0, -cp); 
                 }
             }
 
@@ -124,8 +124,8 @@ public:
         update_best(pref_v);
         update_best(v_cur);
         
-        const int num_dirs = 36;
-        const int num_speeds = 3;
+        const int num_dirs = 24;
+        const int num_speeds = 2;
         for (int i = 0; i < num_dirs; ++i) {
             double theta = 2.0 * M_PI * i / num_dirs;
             Vec dir(cos(theta), sin(theta));
@@ -134,8 +134,8 @@ public:
             }
         }
         
-        for (int i = 1; i <= 8; ++i) {
-            double angle = (i - 4.5) * 0.2;
+        for (int i = 1; i <= 4; ++i) {
+            double angle = (i - 2.5) * 0.2;
             update_best(pref_v.rotate(angle));
             update_best(v_cur.rotate(angle));
         }
